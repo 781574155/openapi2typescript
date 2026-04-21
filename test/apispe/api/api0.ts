@@ -37,7 +37,6 @@ export async function postLicenceActive(body: {}, file?: File, options?: { [key:
   return request<{ message?: any }>('/licence/active', {
     method: 'POST',
     data: formData,
-    requestType: 'form',
     ...(options || {}),
   });
 }
