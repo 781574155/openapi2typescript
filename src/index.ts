@@ -24,6 +24,23 @@ export type GenerateServiceProps = {
   requestLibPath?: string;
   requestOptionsType?: string;
   requestImportStatement?: string;
+  /**
+   * Generate TanStack Query hooks beside request functions.
+   */
+  reactQuery?:
+    | boolean
+    | {
+        /**
+         * TanStack Query package path.
+         * @default '@tanstack/react-query'
+         */
+        importPath?: string;
+        /**
+         * Generate mutation hooks for non-GET operations.
+         * @default false
+         */
+        mutation?: boolean;
+      };
   // interface 类型声明方式, 满足某些团队的开发规范
   declareType?: 'type' | 'interface';
   /**

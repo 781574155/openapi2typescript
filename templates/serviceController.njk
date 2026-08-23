@@ -1,6 +1,90 @@
 // @ts-ignore
 /* eslint-disable */
 {{ requestImportStatement }}
+{% if reactQuery %}
+{% set shouldGenerateMutation = reactQuery.mutation and hasMutation %}
+{% if hasQuery and shouldGenerateMutation %}
+import { useMutation, useQuery } from '{{ reactQuery.importPath }}';
+import type { UseMutationOptions, UseQueryOptions } from '{{ reactQuery.importPath }}';
+{% elif hasQuery %}
+import { useQuery } from '{{ reactQuery.importPath }}';
+import type { UseQueryOptions } from '{{ reactQuery.importPath }}';
+{% elif shouldGenerateMutation %}
+import { useMutation } from '{{ reactQuery.importPath }}';
+import type { UseMutationOptions } from '{{ reactQuery.importPath }}';
+{% endif %}
+
+{% if hasQuery %}
+type ReactQueryHookOptions<TData, TQueryKey extends readonly unknown[]> = Omit<
+  UseQueryOptions<TData, unknown, TData, TQueryKey>,
+  'queryKey' | 'queryFn'
+>;
+{% endif %}
+
+{% if hasQuery or shouldGenerateMutation %}
+type ReactQueryAwaited<T> = T extends PromiseLike<infer U> ? ReactQueryAwaited<U> : T;
+
+type ReactQueryData<TFunction extends (...args: any[]) => any> = ReactQueryAwaited<
+  ReturnType<TFunction>
+>;
+{% endif %}
+
+{% if shouldGenerateMutation %}
+type ReactMutationHookOptions<TData, TVariables> = Omit<
+  UseMutationOptions<TData, unknown, TVariables>,
+  'mutationKey' | 'mutationFn'
+>;
+{% endif %}
+{% endif %}
+
+{% macro bodyType(api) -%}
+{%- if api.body.propertiesList -%}
+{
+  {%- for prop in api.body.propertiesList %}
+  {% if prop.schema.description -%}
+  /** {{ prop.schema.description }} */
+  {% endif -%}
+  {{ prop.key }}{{ "?" if not prop.schema.required }}: {{ prop.schema.type }},
+  {%- endfor %}
+}
+{%- else -%}
+{{ api.body.type }}
+{%- endif -%}
+{%- endmacro %}
+
+{% macro serviceCall(api, optionsName) -%}
+{{ api.functionName }}(
+  {%- if api.params and api.hasParams -%}
+  params,
+  {%- endif -%}
+  {%- if api.body -%}
+  body,
+  {%- endif -%}
+  {%- if api.file -%}
+  {%- for file in api.file -%}
+  {{file.title | safe}},
+  {%- endfor -%}
+  {%- endif -%}
+  {{ optionsName }}
+)
+{%- endmacro %}
+
+{% macro mutationServiceCall(api) -%}
+{{ api.functionName }}(
+  {%- if api.params and api.hasParams -%}
+  variables.params,
+  {%- endif -%}
+  {%- if api.body -%}
+  variables.body,
+  {%- endif -%}
+  {%- if api.file -%}
+  {%- for file in api.file -%}
+  variables['{{ file.title | safe }}'],
+  {%- endfor -%}
+  {%- endif -%}
+  variables{% if not (api.params and api.hasParams) and not api.body and not api.file %}?{% endif %}.options
+)
+{%- endmacro %}
 
 {% for api in list -%}
 /** {{ api.desc if api.desc else '此处后端没有提供注释' }} {{api.method | upper}} {{ api.pathInComment | safe }} */
@@ -31,17 +115,7 @@ export async function {{ api.functionName }}(
 {%- if api.body -%}
   body
   {%- if genType === "ts" -%}
-  : {% if api.body.propertiesList %}{
-    {%- for prop in api.body.propertiesList %}
-    {% if prop.schema.description -%}
-    /** {{ prop.schema.description }} */
-    {% endif -%}
-    {{ prop.key }}{{ "?" if not prop.schema.required }}: {{ prop.schema.type }},
-    {%- endfor %}
-  }
-  {%- else -%}
-  {{ api.body.type }}
-  {%- endif -%}
+  : {{ bodyType(api) | safe }}
   {%- endif -%}
   {{ "," if api.file }}
 {%- endif %}
@@ -144,5 +218,108 @@ export async function {{ api.functionName }}(
     ...(options || {{api.options | dump}}),
   });
 }
+
+{% if reactQuery and api.isQuery %}
+export const {{ api.queryKeyName }} = (
+  {%- if api.params and api.hasParams -%}
+  params: {{namespace}}.{{api.typeName}},
+  {%- endif -%}
+  {%- if api.body -%}
+  body: {{ bodyType(api) | safe }},
+  {%- endif -%}
+  {%- if api.file -%}
+  {%- for file in api.file -%}
+  {{file.title | safe}}: File {{ "[]" if file.multiple }},
+  {%- endfor -%}
+  {%- endif -%}
+) => [
+  '{{ className }}',
+  '{{ api.functionName }}',
+  {%- if api.params and api.hasParams -%}
+  params,
+  {%- endif -%}
+  {%- if api.body -%}
+  body,
+  {%- endif -%}
+  {%- if api.file -%}
+  {%- for file in api.file -%}
+  {{file.title | safe}},
+  {%- endfor -%}
+  {%- endif -%}
+] as const;
+
+export function {{ api.queryHookName }}(
+  {%- if api.params and api.hasParams -%}
+  params: {{namespace}}.{{api.typeName}},
+  {%- endif -%}
+  {%- if api.body -%}
+  body: {{ bodyType(api) | safe }},
+  {%- endif -%}
+  {%- if api.file -%}
+  {%- for file in api.file -%}
+  {{file.title | safe}}: File {{ "[]" if file.multiple }},
+  {%- endfor -%}
+  {%- endif -%}
+  queryOptions?: ReactQueryHookOptions<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    ReturnType<typeof {{ api.queryKeyName }}>
+  >,
+  requestOptions?: {{ requestOptionsType }}
+) {
+  return useQuery({
+    ...(queryOptions || {}),
+    queryKey: {{ api.queryKeyName }}(
+      {%- if api.params and api.hasParams -%}
+      params,
+      {%- endif -%}
+      {%- if api.body -%}
+      body,
+      {%- endif -%}
+      {%- if api.file -%}
+      {%- for file in api.file -%}
+      {{file.title | safe}},
+      {%- endfor -%}
+      {%- endif -%}
+    ),
+    queryFn: () => {{ serviceCall(api, 'requestOptions') | safe }},
+  });
+}
+{% endif %}
+
+{% if reactQuery and shouldGenerateMutation and not api.isQuery %}
+export type {{ api.mutationVariablesTypeName }} = {
+  {%- if api.params and api.hasParams %}
+  params: {{namespace}}.{{api.typeName}};
+  {%- endif %}
+  {%- if api.body %}
+  body: {{ bodyType(api) | safe }};
+  {%- endif %}
+  {%- if api.file %}
+  {%- for file in api.file %}
+  '{{ file.title | safe }}': File {{ "[]" if file.multiple }};
+  {%- endfor %}
+  {%- endif %}
+  options?: {{ requestOptionsType }};
+};
+
+export function {{ api.mutationHookName }}(
+  mutationOptions?: ReactMutationHookOptions<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    {{ api.mutationVariablesTypeName }}
+  >
+) {
+  return useMutation<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    unknown,
+    {{ api.mutationVariablesTypeName }}
+  >({
+    ...(mutationOptions || {}),
+    mutationKey: ['{{ className }}', '{{ api.functionName }}'],
+    mutationFn: (
+      variables{% if not (api.params and api.hasParams) and not api.body and not api.file %}?{% endif %}: {{ api.mutationVariablesTypeName }}
+    ) => {{ mutationServiceCall(api) | safe }},
+  });
+}
+{% endif %}
 
 {% endfor -%}

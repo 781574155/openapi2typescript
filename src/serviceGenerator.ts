@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'fs';
 import glob from 'glob';
-import { camelCase, isBoolean, isArray } from 'lodash';
+import { camelCase, isBoolean, isArray, upperFirst } from 'lodash';
 import * as nunjucks from 'nunjucks';
 import type {
   ContentObject,
@@ -33,6 +33,11 @@ export interface APIDataType extends OperationObject {
 }
 
 export type TagAPIDataType = Record<string, APIDataType[]>;
+
+type ReactQueryTemplateConfig = {
+  importPath: string;
+  mutation: boolean;
+};
 
 export interface MappingItemType {
   antTechApi: string;
@@ -391,6 +396,7 @@ class ServiceGenerator {
     });
     // 生成 controller 文件
     const prettierError = [];
+    const reactQuery = this.getReactQueryConfig();
     // 生成 service 统计
     this.getServiceTP().forEach((tp) => {
       // 根据当前数据源类型选择恰当的 controller 模版
@@ -402,6 +408,7 @@ class ServiceGenerator {
           namespace: this.config.namespace,
           requestOptionsType: this.config.requestOptionsType,
           requestImportStatement: this.config.requestImportStatement,
+          reactQuery,
           disableTypeCheck: false,
           ...tp,
         },
@@ -426,6 +433,24 @@ class ServiceGenerator {
     const c = [].concat(...arrays.filter(Array.isArray));
     return c.length > 0 ? c : null;
   };
+
+  private getReactQueryConfig(): ReactQueryTemplateConfig | null {
+    const config = this.config.reactQuery;
+    if (!config) {
+      return null;
+    }
+    if (typeof config === 'boolean') {
+      return {
+        importPath: '@tanstack/react-query',
+        mutation: false,
+      };
+    }
+    return {
+      importPath: '@tanstack/react-query',
+      mutation: false,
+      ...config,
+    };
+  }
 
   public getFuncationName(data: APIDataType) {
     // 获取路径相同部分
@@ -557,9 +582,18 @@ class ServiceGenerator {
                 return `$\{${prefix}}${formattedPath}`;
               };
 
+              const finalFunctionName = this.config.isCamelCase
+                ? camelCase(functionName)
+                : functionName;
+
               return {
                 ...newApi,
-                functionName: this.config.isCamelCase ? camelCase(functionName) : functionName,
+                functionName: finalFunctionName,
+                isQuery: newApi.method.toLowerCase() === 'get',
+                queryKeyName: `get${upperFirst(finalFunctionName)}QueryKey`,
+                queryHookName: `use${upperFirst(finalFunctionName)}Query`,
+                mutationHookName: `use${upperFirst(finalFunctionName)}Mutation`,
+                mutationVariablesTypeName: `${upperFirst(finalFunctionName)}MutationVariables`,
                 typeName: this.getTypeName(newApi),
                 path: getPrefixPath(),
                 pathInComment: formattedPath.replace(/\*/g, '&#42;'),
@@ -612,6 +646,8 @@ class ServiceGenerator {
         return {
           genType: 'ts',
           className,
+          hasQuery: genParams.some((api) => api.isQuery),
+          hasMutation: genParams.some((api) => !api.isQuery),
           instanceName: `${fileName[0]?.toLowerCase()}${fileName.substr(1)}`,
           list: genParams,
         };

@@ -46,6 +46,28 @@ export default [
 ]
 ```
 
+Enable TanStack Query hook generation when you want query hooks beside the request functions:
+
+```typescript
+export default {
+  schemaPath: 'http://petstore.swagger.io/v2/swagger.json',
+  serversPath: './servers',
+  reactQuery: true,
+}
+```
+
+Enable mutation hook generation when you also want mutation hooks for non-GET operations:
+
+```typescript
+export default {
+  schemaPath: 'http://petstore.swagger.io/v2/swagger.json',
+  serversPath: './servers',
+  reactQuery: {
+    mutation: true,
+  },
+}
+```
+
 2. Add the generation script to your `package.json`:
 
 ```json
@@ -69,6 +91,7 @@ npm run openapi2ts
 | requestLibPath | No | Custom request method path | string | - |
 | requestOptionsType | No | Custom request options type | string | {[key: string]: any} |
 | requestImportStatement | No | Custom request import statement | string | - |
+| reactQuery | No | Generate React Query hooks. Mutation hooks are disabled by default. | boolean \| { importPath?: string; mutation?: boolean } | false |
 | apiPrefix | No | API prefix | string | - |
 | serversPath | No | Output directory path | string | - |
 | schemaPath | No | Swagger 2.0 or OpenAPI 3.0 URL | string | - |
