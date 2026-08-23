@@ -6,6 +6,11 @@
 import * as {{ api.controllerName }} from './{{ api.fileName }}'
 {% endfor -%}
 
+export {
+  {% for api in list -%}
+  {{ api.controllerName }},
+  {% endfor -%}
+}
 
 export default {
   {% for api in list -%}

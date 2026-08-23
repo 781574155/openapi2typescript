@@ -19,6 +19,8 @@ const gen = async () => {
     schemaPath: `${__dirname}/example-files/swagger-get-method-params-convert-obj.json`,
     serversPath: './servers',
   });
+  const serviceIndexStr = fs.readFileSync(path.join(__dirname, 'servers/api/index.ts'), 'utf8');
+  assert(serviceIndexStr.indexOf('export { psp };') > 0);
 
   await openAPI.generateService({
     schemaPath: `${__dirname}/example-files/swagger-get-method-params-convert-obj.json`,
