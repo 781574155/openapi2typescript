@@ -39,6 +39,23 @@ type ReactQueryTemplateConfig = {
   mutation: boolean;
 };
 
+/** 页码入参名，Spring 里可能平铺为 `page`，也可能嵌在 `pageable` 对象中 */
+const PAGE_PARAM_NAME = 'page';
+/** 首页页码，Spring Data Pageable 从 0 开始 */
+const FIRST_PAGE_PARAM = 0;
+/** 分页返回体中列表字段的候选名 */
+const PAGE_CONTENT_FIELDS = ['content', 'records', 'list', 'items', 'rows'];
+/** 分页元信息可能嵌套在这些字段下（如 springdoc 的 PagedModel.page） */
+const PAGE_METADATA_FIELDS = ['page', 'pageInfo', 'page_info', 'meta', 'metadata', 'pageable'];
+/** 分页返回体中当前页码字段的候选名 */
+const PAGE_NUMBER_FIELDS = ['number', 'pageNumber', 'page_number', 'pageNum', 'page', 'current'];
+/** 分页返回体中总页数字段的候选名 */
+const PAGE_TOTAL_PAGES_FIELDS = ['totalPages', 'total_pages', 'pages'];
+/** 分页返回体中「是否最后一页」字段的候选名 */
+const PAGE_LAST_FIELDS = ['last', 'isLast', 'is_last'];
+/** 分页返回体被壳结构包裹时，数据字段的候选名 */
+const DEFAULT_DATA_FIELDS = ['data', 'result', 'res'];
+
 export interface MappingItemType {
   antTechApi: string;
   popAction: string;
@@ -103,7 +120,7 @@ const resolveTypeName = (typeName: string) => {
   // 这里做一个统一处理
   if (/^\d/.test(name)) {
     const firstChar = parseInt(name[0]);
-    name = `${numberToWords.toWords(firstChar)}${name.substring(1)}`
+    name = `${numberToWords.toWords(firstChar)}${name.substring(1)}`;
   }
 
   if (!/[\u3220-\uFA29]/.test(name) && !/^\d$/.test(name)) {
@@ -439,16 +456,174 @@ class ServiceGenerator {
     if (!config) {
       return null;
     }
-    if (typeof config === 'boolean') {
-      return {
-        importPath: '@tanstack/react-query',
-        mutation: false,
-      };
-    }
     return {
       importPath: '@tanstack/react-query',
       mutation: false,
-      ...config,
+      ...(typeof config === 'boolean' ? {} : config),
+    };
+  }
+
+  /** 顺着 $ref 找到真正的 schema 定义 */
+  private dereferenceSchema(schema: SchemaObject | ReferenceObject): SchemaObject | null {
+    let current: any = schema;
+    let depth = 0;
+    while (current?.$ref && depth < 10) {
+      const refName = current.$ref.split('/').pop();
+      current = this.openAPIData.components?.schemas?.[refName];
+      depth += 1;
+    }
+    return (current as SchemaObject) || null;
+  }
+
+  /** 展开 $ref 与 allOf，得到 schema 的属性集合 */
+  private getSchemaProperties(
+    schema: SchemaObject | ReferenceObject | undefined,
+    depth = 0,
+  ): Record<string, SchemaObject> | null {
+    const resolved = schema && depth < 10 && this.dereferenceSchema(schema);
+    if (!resolved) {
+      return null;
+    }
+    let props = resolved.properties ? { ...resolved.properties } : null;
+    (resolved.allOf || []).forEach((item) => {
+      const itemProps = this.getSchemaProperties(item, depth + 1);
+      if (itemProps) {
+        props = { ...(props || {}), ...itemProps };
+      }
+    });
+    return props as Record<string, SchemaObject> | null;
+  }
+
+  private isScalarSchema(schema: SchemaObject | ReferenceObject | undefined) {
+    const type = schema && this.dereferenceSchema(schema)?.type;
+    return !!type && type !== 'object' && type !== 'array';
+  }
+
+  /** 从分页元信息的属性集合中挑出页码、总页数等字段名 */
+  private matchPageMetaFields(props: Record<string, SchemaObject>) {
+    const findScalar = (candidates: string[]) =>
+      candidates.find((field) => props[field] && this.isScalarSchema(props[field]));
+    const pageNumberField = findScalar(PAGE_NUMBER_FIELDS);
+    const totalPagesField = findScalar(PAGE_TOTAL_PAGES_FIELDS);
+    const lastField = findScalar(PAGE_LAST_FIELDS);
+    if (!pageNumberField && !totalPagesField && !lastField) {
+      return null;
+    }
+    return { pageNumberField, totalPagesField, lastField };
+  }
+
+  /** 判断 schema 是否为分页结构（Spring Data Page / PagedModel 及类似结构），并返回其关键字段名 */
+  private matchPageSchema(schema: SchemaObject | ReferenceObject | undefined) {
+    const props = this.getSchemaProperties(schema);
+    if (!props) {
+      return null;
+    }
+    const contentField = PAGE_CONTENT_FIELDS.find(
+      (field) => this.dereferenceSchema(props[field])?.type === 'array',
+    );
+    if (!contentField) {
+      return null;
+    }
+    // 元信息可能嵌在子对象里（PagedModel.page），也可能与 content 平铺（Page）
+    for (const metaField of PAGE_METADATA_FIELDS) {
+      const metaProps = this.getSchemaProperties(props[metaField]);
+      const fields = metaProps && this.matchPageMetaFields(metaProps);
+      if (fields) {
+        return { contentField, metadataPath: [metaField], ...fields };
+      }
+    }
+    const fields = this.matchPageMetaFields(props);
+    return fields ? { contentField, metadataPath: [] as string[], ...fields } : null;
+  }
+
+  /**
+   * 定位响应体中的分页结构。
+   * dataPath 表示在「生成的返回类型」上访问分页对象所需的字段路径，
+   * 若已通过 dataFields 拆包，则为空数组。
+   */
+  private getPageSchemaInfo(responses: ResponsesObject = {}) {
+    const response: ResponseObject | undefined =
+      responses && this.resolveRefObject(responses.default || responses['200'] || responses['201']);
+    const resContent: ContentObject | undefined = response?.content;
+    const mediaTypes = Object.keys(resContent || {});
+    const mediaType = mediaTypes.includes('application/json') ? 'application/json' : mediaTypes[0];
+    if (!resContent || !mediaType || !resContent[mediaType].schema) {
+      return null;
+    }
+    const rootSchema = resContent[mediaType].schema as SchemaObject;
+    const wrapperProps = this.getSchemaProperties(rootSchema);
+
+    // dataFields 已拆包时，生成的返回类型就是分页对象本身
+    if (this.config.dataFields?.length && rootSchema.$ref && wrapperProps) {
+      const unwrapped = this.config.dataFields
+        .map((field) => wrapperProps[field])
+        .filter(Boolean)?.[0];
+      const matched = unwrapped && this.matchPageSchema(unwrapped);
+      if (matched) {
+        return { ...matched, dataPath: [] as string[] };
+      }
+    }
+
+    const direct = this.matchPageSchema(rootSchema);
+    if (direct) {
+      return { ...direct, dataPath: [] as string[] };
+    }
+
+    // 形如 GeneralOperationResult<Page<T>> 的壳结构
+    if (wrapperProps) {
+      const dataFields = this.config.dataFields?.length
+        ? this.config.dataFields
+        : DEFAULT_DATA_FIELDS;
+      for (const field of dataFields) {
+        const matched = this.matchPageSchema(wrapperProps[field]);
+        if (matched) {
+          return { ...matched, dataPath: [field] };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * 定位页码入参。既支持平铺的 `page` 参数，
+   * 也支持 Spring 里以对象形式出现的 `pageable` 参数（page 嵌在其中）。
+   */
+  private getPageParamInfo(params: Record<string, ParameterObject[]>) {
+    const queryParams = (params?.query || []) as (ParameterObject & {
+      isObject?: boolean;
+      type?: string;
+    })[];
+    const flat = queryParams.find((p) => p.name === PAGE_PARAM_NAME);
+    if (flat && this.isScalarSchema(flat.schema)) {
+      return { pageParamName: flat.name, nestedPageField: null, pageParamType: null };
+    }
+    const nested = queryParams.find(
+      (p) => p.isObject && this.getSchemaProperties(p.schema)?.[PAGE_PARAM_NAME],
+    );
+    if (nested) {
+      return {
+        pageParamName: nested.name,
+        nestedPageField: PAGE_PARAM_NAME,
+        pageParamType: nested.type,
+      };
+    }
+    return null;
+  }
+
+  /** 生成 useInfiniteQuery 所需的模板数据，不满足分页特征时返回 null */
+  private getInfiniteQueryTP(api: APIDataType, params: Record<string, ParameterObject[]>) {
+    const pageParam = this.getPageParamInfo(params);
+    if (!pageParam) {
+      return null;
+    }
+    const pageSchema = this.getPageSchemaInfo(api.responses);
+    if (!pageSchema) {
+      return null;
+    }
+    return {
+      ...pageSchema,
+      ...pageParam,
+      firstPageParam: FIRST_PAGE_PARAM,
     };
   }
 
@@ -513,8 +688,9 @@ class ServiceGenerator {
               );
               if (newApi.extensions && newApi.extensions['x-antTech-description']) {
                 const { extensions } = newApi;
-                const { apiName, antTechVersion, productCode, antTechApiName } =
-                  extensions['x-antTech-description'];
+                const { apiName, antTechVersion, productCode, antTechApiName } = extensions[
+                  'x-antTech-description'
+                ];
                 formattedPath = antTechApiName || formattedPath;
                 this.mappings.push({
                   antTechApi: formattedPath,
@@ -586,12 +762,18 @@ class ServiceGenerator {
                 ? camelCase(functionName)
                 : functionName;
 
+              const isQuery = newApi.method.toLowerCase() === 'get';
+              const infiniteQuery = isQuery ? this.getInfiniteQueryTP(newApi, finalParams) : null;
+
               return {
                 ...newApi,
                 functionName: finalFunctionName,
-                isQuery: newApi.method.toLowerCase() === 'get',
+                isQuery,
                 queryKeyName: `get${upperFirst(finalFunctionName)}QueryKey`,
                 queryHookName: `use${upperFirst(finalFunctionName)}Query`,
+                infiniteQuery,
+                infiniteQueryKeyName: `get${upperFirst(finalFunctionName)}InfiniteQueryKey`,
+                infiniteQueryHookName: `use${upperFirst(finalFunctionName)}InfiniteQuery`,
                 mutationHookName: `use${upperFirst(finalFunctionName)}Mutation`,
                 mutationVariablesTypeName: `${upperFirst(finalFunctionName)}MutationVariables`,
                 typeName: this.getTypeName(newApi),
@@ -647,6 +829,7 @@ class ServiceGenerator {
           genType: 'ts',
           className,
           hasQuery: genParams.some((api) => api.isQuery),
+          hasInfiniteQuery: genParams.some((api) => !!api.infiniteQuery),
           hasMutation: genParams.some((api) => !api.isQuery),
           instanceName: `${fileName[0]?.toLowerCase()}${fileName.substr(1)}`,
           list: genParams,

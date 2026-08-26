@@ -68,6 +68,23 @@ export default {
 }
 ```
 
+`useInfiniteQuery` hooks are always generated for paged GET operations (e.g. a Spring Boot
+`GeneralOperationResult<Page<T>>` response together with a `Pageable` query parameter).
+
+An operation gets an infinite hook when it is a GET, exposes the page parameter, and its response
+contains a page-like object. Both the flat `page` query parameter and Spring's object-shaped
+`pageable` parameter are supported; in the latter case the hook takes `pageable` without its
+`page` field. The page object is detected either directly, after `dataFields` unwrapping, or
+nested under a wrapper field (`data`/`result`/`res`), and `allOf` wrappers are resolved, which
+covers `GeneralOperationResult<Page<T>>` / `GeneralOperationResult<PagedModel<T>>`. Page metadata
+is read from the page object itself (Spring Data `Page`) or from its nested `page` field
+(springdoc `PagedModel`):
+
+```typescript
+const { data, fetchNextPage, hasNextPage } = useReadAllInfiniteQuery({ pageable: { size: 20 } });
+const items = data?.pages.flatMap((p) => p.data?.content ?? []) ?? [];
+```
+
 2. Add the generation script to your `package.json`:
 
 ```json
@@ -91,7 +108,7 @@ npm run openapi2ts
 | requestLibPath | No | Custom request method path | string | - |
 | requestOptionsType | No | Custom request options type | string | {[key: string]: any} |
 | requestImportStatement | No | Custom request import statement | string | - |
-| reactQuery | No | Generate React Query hooks. Mutation hooks are disabled by default. | boolean \| { importPath?: string; mutation?: boolean } | false |
+| reactQuery | No | Generate React Query hooks. Infinite query hooks are always generated for paged GET operations, mutation hooks are off by default. | boolean \| { importPath?: string; mutation?: boolean } | false |
 | apiPrefix | No | API prefix | string | - |
 | serversPath | No | Output directory path | string | - |
 | schemaPath | No | Swagger 2.0 or OpenAPI 3.0 URL | string | - |

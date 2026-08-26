@@ -3,13 +3,16 @@
 {{ requestImportStatement }}
 {% if reactQuery %}
 {% set shouldGenerateMutation = reactQuery.mutation and hasMutation %}
-{% if hasQuery and shouldGenerateMutation %}
-import { useMutation, useQuery } from '{{ reactQuery.importPath }}';
-import type { UseMutationOptions, UseQueryOptions } from '{{ reactQuery.importPath }}';
-{% elif hasQuery %}
+{% set shouldGenerateInfiniteQuery = hasInfiniteQuery %}
+{% if hasQuery %}
 import { useQuery } from '{{ reactQuery.importPath }}';
 import type { UseQueryOptions } from '{{ reactQuery.importPath }}';
-{% elif shouldGenerateMutation %}
+{% endif %}
+{% if shouldGenerateInfiniteQuery %}
+import { useInfiniteQuery } from '{{ reactQuery.importPath }}';
+import type { InfiniteData, UseInfiniteQueryOptions } from '{{ reactQuery.importPath }}';
+{% endif %}
+{% if shouldGenerateMutation %}
 import { useMutation } from '{{ reactQuery.importPath }}';
 import type { UseMutationOptions } from '{{ reactQuery.importPath }}';
 {% endif %}
@@ -21,7 +24,24 @@ type ReactQueryHookOptions<TData, TQueryKey extends readonly unknown[]> = Omit<
 >;
 {% endif %}
 
-{% if hasQuery or shouldGenerateMutation %}
+{% if shouldGenerateInfiniteQuery %}
+type ReactInfiniteQueryHookOptions<
+  TQueryFnData,
+  TQueryKey extends readonly unknown[],
+  TPageParam = number,
+> = Omit<
+  UseInfiniteQueryOptions<
+    TQueryFnData,
+    unknown,
+    InfiniteData<TQueryFnData, TPageParam>,
+    TQueryKey,
+    TPageParam
+  >,
+  'queryKey' | 'queryFn' | 'initialPageParam' | 'getNextPageParam'
+>;
+{% endif %}
+
+{% if hasQuery or shouldGenerateMutation or shouldGenerateInfiniteQuery %}
 type ReactQueryAwaited<T> = T extends PromiseLike<infer U> ? ReactQueryAwaited<U> : T;
 
 type ReactQueryData<TFunction extends (...args: any[]) => any> = ReactQueryAwaited<
@@ -66,6 +86,34 @@ type ReactMutationHookOptions<TData, TVariables> = Omit<
   {%- endfor -%}
   {%- endif -%}
   {{ optionsName }}
+)
+{%- endmacro %}
+
+{% macro infinitePageParamsType(api) -%}
+{%- if api.infiniteQuery.nestedPageField -%}
+Omit<{{namespace}}.{{api.typeName}}, '{{ api.infiniteQuery.pageParamName }}'> & { '{{ api.infiniteQuery.pageParamName }}'?: Omit<{{ api.infiniteQuery.pageParamType }}, '{{ api.infiniteQuery.nestedPageField }}'> }
+{%- else -%}
+Omit<{{namespace}}.{{api.typeName}}, '{{ api.infiniteQuery.pageParamName }}'>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro infinitePagedParams(api) -%}
+{%- if api.infiniteQuery.nestedPageField -%}
+{ ...params, '{{ api.infiniteQuery.pageParamName }}': { ...params['{{ api.infiniteQuery.pageParamName }}'], '{{ api.infiniteQuery.nestedPageField }}': pageParam } }
+{%- else -%}
+{ ...params, '{{ api.infiniteQuery.pageParamName }}': pageParam }
+{%- endif -%}
+{%- endmacro %}
+
+{% macro infiniteServiceCall(api) -%}
+{{ api.functionName }}(
+  {%- if api.params and api.hasParams -%}
+  {{ infinitePagedParams(api) }} as {{namespace}}.{{api.typeName}},
+  {%- endif -%}
+  {%- if api.body -%}
+  body,
+  {%- endif -%}
+  requestOptions
 )
 {%- endmacro %}
 
@@ -266,7 +314,12 @@ export function {{ api.queryHookName }}(
   >,
   requestOptions?: {{ requestOptionsType }}
 ) {
-  return useQuery({
+  return useQuery<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    unknown,
+    ReactQueryData<typeof {{ api.functionName }}>,
+    ReturnType<typeof {{ api.queryKeyName }}>
+  >({
     ...(queryOptions || {}),
     queryKey: {{ api.queryKeyName }}(
       {%- if api.params and api.hasParams -%}
@@ -282,6 +335,94 @@ export function {{ api.queryHookName }}(
       {%- endif -%}
     ),
     queryFn: () => {{ serviceCall(api, 'requestOptions') | safe }},
+  });
+}
+{% endif %}
+
+{% if reactQuery and shouldGenerateInfiniteQuery and api.infiniteQuery %}
+export const {{ api.infiniteQueryKeyName }} = (
+  {%- if api.params and api.hasParams -%}
+  params: {{ infinitePageParamsType(api) }},
+  {%- endif -%}
+  {%- if api.body -%}
+  body: {{ bodyType(api) | safe }},
+  {%- endif -%}
+) => [
+  '{{ className }}',
+  '{{ api.functionName }}',
+  'infinite',
+  {%- if api.params and api.hasParams -%}
+  params,
+  {%- endif -%}
+  {%- if api.body -%}
+  body,
+  {%- endif -%}
+] as const;
+
+export function {{ api.infiniteQueryHookName }}(
+  {%- if api.params and api.hasParams -%}
+  params: {{ infinitePageParamsType(api) }},
+  {%- endif -%}
+  {%- if api.body -%}
+  body: {{ bodyType(api) | safe }},
+  {%- endif -%}
+  queryOptions?: ReactInfiniteQueryHookOptions<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    ReturnType<typeof {{ api.infiniteQueryKeyName }}>
+  >,
+  requestOptions?: {{ requestOptionsType }}
+) {
+  return useInfiniteQuery<
+    ReactQueryData<typeof {{ api.functionName }}>,
+    unknown,
+    InfiniteData<ReactQueryData<typeof {{ api.functionName }}>, number>,
+    ReturnType<typeof {{ api.infiniteQueryKeyName }}>,
+    number
+  >({
+    ...(queryOptions || {}),
+    queryKey: {{ api.infiniteQueryKeyName }}(
+      {%- if api.params and api.hasParams -%}
+      params,
+      {%- endif -%}
+      {%- if api.body -%}
+      body,
+      {%- endif -%}
+    ),
+    queryFn: ({ pageParam }: { pageParam: number }) => {{ infiniteServiceCall(api) | safe }},
+    initialPageParam: {{ api.infiniteQuery.firstPageParam }},
+    getNextPageParam: (
+      lastPage: ReactQueryData<typeof {{ api.functionName }}>,
+      _allPages: ReactQueryData<typeof {{ api.functionName }}>[],
+      lastPageParam: number
+    ) => {
+      const page = lastPage?.data{% for field in api.infiniteQuery.dataPath %}?.{{ field }}{% endfor %};
+      if (!page) {
+        return undefined;
+      }
+      if (Array.isArray(page.{{ api.infiniteQuery.contentField }}) && page.{{ api.infiniteQuery.contentField }}.length === 0) {
+        return undefined;
+      }
+      const meta = page{% for field in api.infiniteQuery.metadataPath %}?.{{ field }}{% endfor %};
+      if (!meta) {
+        return undefined;
+      }
+      {%- if api.infiniteQuery.lastField %}
+      if (meta.{{ api.infiniteQuery.lastField }} === true) {
+        return undefined;
+      }
+      {%- endif %}
+      {%- if api.infiniteQuery.pageNumberField %}
+      const currentPage = typeof meta.{{ api.infiniteQuery.pageNumberField }} === 'number' ? meta.{{ api.infiniteQuery.pageNumberField }} : lastPageParam;
+      {%- else %}
+      const currentPage = lastPageParam;
+      {%- endif %}
+      {%- if api.infiniteQuery.totalPagesField %}
+      if (typeof meta.{{ api.infiniteQuery.totalPagesField }} === 'number' && currentPage + 1 >= meta.{{ api.infiniteQuery.totalPagesField }}) {
+        return undefined;
+      }
+      {%- endif %}
+      return currentPage + 1;
+    },
   });
 }
 {% endif %}

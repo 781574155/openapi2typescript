@@ -26,6 +26,7 @@ export type GenerateServiceProps = {
   requestImportStatement?: string;
   /**
    * Generate TanStack Query hooks beside request functions.
+   * 分页 GET 接口会额外生成 `useInfiniteQuery` hook。
    */
   reactQuery?:
     | boolean
@@ -215,7 +216,10 @@ export const getSchema = async (schemaPath: string, authorization?: string) => {
       const headers = {
         authorization,
       };
-      const json = await fetch(schemaPath, { agent, headers: authorization? headers: {} }).then((rest) => rest.json());
+      const json = await fetch(schemaPath, {
+        agent,
+        headers: authorization ? headers : {},
+      }).then((rest) => rest.json());
       return json;
     } catch (error) {
       // eslint-disable-next-line no-console

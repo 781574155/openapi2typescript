@@ -1,0 +1,87 @@
+{
+  "openapi": "3.0.1",
+  "info": { "title": "spring page demo", "version": "1.0" },
+  "paths": {
+    "/api/users": {
+      "get": {
+        "tags": ["user"],
+        "operationId": "listUsers",
+        "parameters": [
+          { "name": "keyword", "in": "query", "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "schema": { "type": "integer", "format": "int32" } },
+          { "name": "size", "in": "query", "schema": { "type": "integer", "format": "int32" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GeneralOperationResultPageUser" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users/{id}": {
+      "get": {
+        "tags": ["user"],
+        "operationId": "getUser",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/GeneralOperationResultUser" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "PageUser": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
+          "totalElements": { "type": "integer", "format": "int64" },
+          "totalPages": { "type": "integer", "format": "int32" },
+          "number": { "type": "integer", "format": "int32" },
+          "size": { "type": "integer", "format": "int32" },
+          "last": { "type": "boolean" },
+          "first": { "type": "boolean" }
+        }
+      },
+      "GeneralOperationResultPageUser": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/PageUser" }
+        }
+      },
+      "GeneralOperationResultUser": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean" },
+          "message": { "type": "string" },
+          "data": { "$ref": "#/components/schemas/User" }
+        }
+      }
+    }
+  }
+}
